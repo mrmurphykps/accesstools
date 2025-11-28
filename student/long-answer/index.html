@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Digital Exam Entry</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f5f5f5;
+        display: flex;
+        justify-content: center;
+    }
+
+    #container {
+        width: 90%;
+        max-width: 1200px;
+        padding: 20px;
+    }
+
+    .page { display: none; }
+    .activePage { display: block; }
+
+    h1, h2 {
+        text-align: center;
+        margin: 10px 0 20px;
+    }
+
+    label {
+        font-size: 18px;
+        display: block;
+        margin: 10px 0 5px;
+    }
+
+    input[type="text"] {
+        width: 100%;
+        padding: 10px;
+        font-size: 18px;
+        border: 2px solid #333;
+        border-radius: 6px;
+        box-sizing: border-box;
+    }
+
+    textarea {
+        width: 100%;
+        height: 65vh;
+        padding: 20px;
+        font-size: 20px;
+        line-height: 1.6;
+        border: 2px solid #333;
+        border-radius: 8px;
+        resize: none;
+        overflow: auto;
+        box-sizing: border-box;
+
+        -webkit-text-size-adjust: none !important;
+        -webkit-touch-callout: none !important;
+        -webkit-user-modify: read-write-plaintext-only !important;
+    }
+
+    button {
+        padding: 12px 20px;
+        margin: 10px 5px;
+        font-size: 18px;
+        cursor: pointer;
+    }
+
+    #clearAllBtn { background: #b30000; color: white; }
+    #endExamBtn { background: #d9534f; color: white; display:none; }
+    .returnFS { background: #ffbf00; display:none; }
+
+    .controlsRow {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 8px 0 2px 0;
+    }
+
+    .dictateBtn {
+        font-size: 18px;
+        padding: 8px 14px;
+        background: #004aad;
+        color: white;
+        border-radius: 8px;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        cursor: pointer;
+    }
+
+    .dictateBtn.listening {
+        background: #cc0000;
+        animation: pulse 1.2s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+        0% { box-shadow: 0 0 2px 2px rgba(255,0,0,0.4);}
+        50% { box-shadow: 0 0 12px 6px rgba(255,0,0,0.8);}
+        100% { box-shadow: 0 0 2px 2px rgba(255,0,0,0.4);}
+    }
+
+    .playbackBar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: #004aad;
+        color: white;
+        padding: 6px 10px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .playbackBar button,
+    .playbackBar select {
+        background: white;
+        border-radius: 6px;
+        border: none;
+        padding: 4px 10px;
+        font-size: 14px;
+        cursor: pointer;
+        color: black;
+    }
+</style>
+</head>
+<body>
+<div id="container">
+
+<h1>Digital Exam Entry</h1>
+
+<div id="page1" class="page activePage">
+    <label>Assessment Title:</label>
+    <input id="assessmentTitle" type="text">
+
+    <label>Candidate Name:</label>
+    <input id="candidateName" type="text">
+
+    <label>Candidate Number:</label>
+    <input id="candidateNumber" type="text">
+
+    <hr>
+
+    <label><input type="checkbox" id="enableReadAloud"> Enable Read-Aloud Tool</label>
+    <label><input type="checkbox" id="enableDictation"> Enable Dictation Tool</label>
+
+    <button onclick="startExam()">Start</button>
+    <button id="clearAllBtn" onclick="clearAllAnswers()">Clear All Answers</button>
+</div>
+
+<div id="questionPages"></div>
+
+<div id="reviewPage" class="page">
+    <h2>Review All Answers</h2>
+    <div id="reviewContainer"></div>
+
+    <button onclick="returnToQuestion()">Back</button>
+    <button onclick="exportPDF()">Export PDF</button>
+    <button onclick="exportHTML()">Export as HTML</button>
+    <button id="endExamBtn" onclick="endExam()">End Exam (Invigilator Only)</button>
+</div>
+
+</div>
+
+<script>
+/* ========================= DATA ========================= */
+let examData = {
+    assessmentTitle:"",
+    candidateName:"",
+    candidateNumber:"",
+    enableReadAloud:false,
+    enableDictation:false,
+    questions:[]
+};
+
+function loadFromCache(){
+    const saved = localStorage.getItem("examData");
+    if(saved){ examData = JSON.parse(saved); }
+    else{ examData.questions=[{text:""}]; }
+}
+loadFromCache();
+
+function saveToCache(){
+    localStorage.setItem("examData", JSON.stringify(examData));
+}
+
+/* ====================== CLEAR ALL ======================= */
+function clearAllAnswers(){
+    if(!confirm("⚠ This will delete ALL answers. Continue?")) return;
+    examData = {
+        assessmentTitle:"",
+        candidateName:"",
+        candidateNumber:"",
+        enableReadAloud:false,
+        enableDictation:false,
+        questions:[{text:""}]
+    };
+    saveToCache();
+    location.reload();
+}
+
+/* ==================== RENDER QUESTIONS ================== */
+function renderQuestions(){
+    const holder=document.getElementById("questionPages");
+    holder.innerHTML="";
+
+    examData.questions.forEach((q,i)=>{
+        const id=i+1;
+        const page=document.createElement("div");
+        page.classList.add("page");
+        page.id="questionPage"+id;
+
+        page.innerHTML = `
+            <h2>Question ${id}</h2>
+
+            <textarea id="textarea${id}" oninput="updateAnswer(${i},this.value)">${q.text}</textarea>
+
+            <div class="controlsRow">
+                <div>
+                    ${examData.enableDictation ? `<button id="dictateBtn${id}" class="dictateBtn">🎤 Dictate</button>` : ""}
+                </div>
+
+                <div>
+                    ${examData.enableReadAloud ? `
+                        <div id="playbackBar${id}" class="playbackBar">
+                            <button class="pbPlay">🔊</button>
+                            <button class="pbPause">⏸</button>
+                            <button class="pbStop">⏹</button>
+                            <select class="pbSpeed">
+                                <option value="0.5">0.5×</option>
+                                <option value="0.75">0.75×</option>
+                                <option value="1" selected>1×</option>
+                                <option value="1.25">1.25×</option>
+                                <option value="1.5">1.5×</option>
+                                <option value="2">2×</option>
+                            </select>
+                        </div>
+                    ` : ""}
+                </div>
+            </div>
+
+            <div>
+                ${i>0?`<button onclick="goToQuestion(${id-1})">Back</button>`:""}
+                ${i<examData.questions.length-1?`<button onclick="goToQuestion(${id+1})">Next</button>`:""}
+
+                <button onclick="addQuestion()">Add Question</button>
+                <button onclick="reviewAll()">Review</button>
+                <button onclick="exportPDF()">Export PDF</button>
+                <button onclick="exportHTML()">Export HTML</button>
+
+                <button id="returnFSBtn${id}" class="returnFS" onclick="requestFullscreen()">Fullscreen</button>
+            </div>
+        `;
+        holder.appendChild(page);
+    });
+}
+
+/* ======================= START ========================== */
+function startExam(){
+    examData.assessmentTitle = assessmentTitle.value;
+    examData.candidateName = candidateName.value;
+    examData.candidateNumber = candidateNumber.value;
+
+    examData.enableReadAloud = enableReadAloud.checked;
+    examData.enableDictation = enableDictation.checked;
+
+    saveToCache();
+    requestFullscreen();
+    goToQuestion(1);
+}
+
+/* ======================= FULLSCREEN ===================== */
+function requestFullscreen(){
+    const el=document.documentElement;
+    (el.requestFullscreen||el.webkitRequestFullscreen).call(el);
+}
+
+document.addEventListener("fullscreenchange", ()=>{
+    const fs = !!document.fullscreenElement;
+    examData.questions.forEach((q,i)=>{
+        const btn=document.getElementById("returnFSBtn"+(i+1));
+        if(btn) btn.style.display = fs?"none":"inline-block";
+    });
+});
+
+/* ==================== NAVIGATION ======================== */
+function goToQuestion(n){
+    renderQuestions();
+    document.querySelectorAll(".page").forEach(p=>p.classList.remove("activePage"));
+    const page=document.getElementById("questionPage"+n);
+    page.classList.add("activePage");
+
+    setTimeout(()=>{
+        const ta=page.querySelector("textarea");
+        if(ta) ta.focus();
+        attachPlayback(n);
+        attachDictation(n);
+    },50);
+}
+
+function addQuestion(){
+    examData.questions.push({text:""});
+    saveToCache();
+    goToQuestion(examData.questions.length);
+}
+
+function updateAnswer(i,val){
+    examData.questions[i].text=val;
+    saveToCache();
+}
+
+/* ======================= REVIEW ========================= */
+function reviewAll(){
+    document.querySelectorAll(".page").forEach(p=>p.classList.remove("activePage"));
+    reviewPage.classList.add("activePage");
+
+    reviewContainer.innerHTML="";
+    examData.questions.forEach((q,i)=>{
+        const div=document.createElement("div");
+        div.innerHTML = `
+            <h3>Question ${i+1}</h3>
+            <p>${q.text.replace(/\n/g,"<br>")}</p>
+            <button onclick="goToQuestion(${i+1})">Edit</button>
+        `;
+        reviewContainer.appendChild(div);
+    });
+}
+
+function returnToQuestion(){ goToQuestion(1); }
+
+/* ======================= PDF ============================ */
+/* (same as previous—kept intact) */
+
+async function exportPDF(){
+    const { jsPDF }=window.jspdf;
+    const pdf=new jsPDF("p","mm","a4");
+
+    const margin=12, pageWidth=210, pageHeight=297;
+    const usableWidth=pageWidth-margin*2;
+    const top=20, bottom=20, usableBottom=pageHeight-bottom;
+
+    const title=examData.assessmentTitle;
+    const name=examData.candidateName;
+    const number=examData.candidateNumber;
+    const date=new Date().toISOString().slice(0,10);
+
+    let y=top;
+
+    pdf.setFontSize(16); pdf.text(title,margin,y); y+=12;
+    pdf.setFontSize(14);
+    pdf.text(`Candidate Name: ${name}`,margin,y); y+=8;
+    pdf.text(`Candidate Number: ${number}`,margin,y); y+=8;
+    pdf.text(`Date: ${date}`,margin,y); y+=15;
+
+    const lh=6, pad=4, gap=lh*3;
+
+    function ensure(h){
+        if(y+h>usableBottom){
+            pdf.addPage(); y=top;
+        }
+    }
+
+    examData.questions.forEach((q,i)=>{
+        const qtitle=`Question ${i+1}`;
+        const text=q.text||"";
+
+        if(i>0){ ensure(gap); y+=gap; }
+
+        pdf.setFontSize(16);
+        ensure(10);
+        pdf.text(qtitle,margin,y);
+        y+=10;
+
+        pdf.setFontSize(12);
+        let lines=pdf.splitTextToSize(text, usableWidth-4);
+        let remaining=[...lines];
+
+        while(remaining.length>0){
+            const avail=usableBottom - y - pad*2;
+            let maxLines=Math.floor(avail/lh);
+            if(maxLines<=0){
+                pdf.addPage(); y=top;
+                pdf.text(`${qtitle} (continued)`,margin,y); y+=8;
+                continue;
+            }
+
+            const chunk=remaining.slice(0,maxLines);
+            remaining=remaining.slice(maxLines);
+
+            const boxHeight=chunk.length*lh + pad*2;
+            pdf.rect(margin,y,usableWidth,boxHeight);
+            pdf.text(chunk,margin+2,y+pad+lh);
+            y+=boxHeight+4;
+        }
+    });
+
+    const total=pdf.getNumberOfPages();
+    for(let p=1;p<=total;p++){
+        pdf.setPage(p);
+        pdf.setFontSize(10);
+        pdf.text(`Assessment: ${title}   Candidate: ${name}   Date: ${date}`,margin,pageHeight-8);
+        pdf.text(`Page ${p} of ${total}`,pageWidth/2,pageHeight-8,{align:"center"});
+    }
+
+    pdf.save(`${title} - ${name} - ${number} - ${date}.pdf`);
+
+    endExamBtn.style.display="inline-block";
+}
+
+/* ======================= EXPORT HTML ==================== */
+function exportHTML(){
+    const title=examData.assessmentTitle;
+    const name=examData.candidateName;
+    const num=examData.candidateNumber;
+    const date=new Date().toISOString().slice(0,10);
+
+    let html = `
+<!DOCTYPE html><html><head><meta charset='UTF-8'>
+<title>${title}</title>
+<style>
+body{font-family:Arial;padding:20px;}
+.question{margin-top:30px;page-break-inside:avoid;}
+.answer{border:2px solid #000;padding:10px;white-space:pre-wrap;}
+</style></head><body>
+<h1>${title}</h1>
+<p><b>Candidate Name:</b> ${name}</p>
+<p><b>Candidate Number:</b> ${num}</p>
+<p><b>Date:</b> ${date}</p>
+`;
+
+    examData.questions.forEach((q,i)=>{
+        html+=`
+<div class='question'>
+<h2>Question ${i+1}</h2>
+<div class='answer'>${q.text.replace(/\n/g,"<br>")}</div>
+</div>`;
+    });
+
+    html+="</body></html>";
+
+    const blob=new Blob([html],{type:"text/html"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`${title} - ${name} - ${num} - ${date}.html`;
+    a.click();
+}
+
+/* ======================= DICTATION ====================== */
+let recognition;
+try{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    recognition=new SR();
+    recognition.lang="en-GB";
+    recognition.continuous=true;
+    recognition.interimResults=false;
+}catch(e){recognition=null;}
+
+let dictating=false;
+
+function attachDictation(id){
+    if(!examData.enableDictation||!recognition) return;
+    const btn=document.getElementById("dictateBtn"+id);
+    if(!btn) return;
+
+    const ta=document.getElementById("textarea"+id);
+
+    btn.onclick=()=>{
+        if(dictating) return;
+        dictating=true;
+        btn.classList.add("listening");
+        recognition.start();
+
+        recognition.onresult=e=>{
+            let txt=e.results[0][0].transcript||"";
+            txt=txt.replace(/\bfull stop\b/gi,".")
+                   .replace(/\bcomma\b/gi,",")
+                   .replace(/\bnew line\b/gi,"\n");
+
+            const st=ta.selectionStart, en=ta.selectionEnd;
+            ta.value = ta.value.substring(0,st)+txt+ta.value.substring(en);
+            ta.selectionStart=ta.selectionEnd=st+txt.length;
+            ta.dispatchEvent(new Event("input"));
+        };
+
+        recognition.onspeechend=()=>recognition.stop();
+        recognition.onend=()=>{ dictating=false; btn.classList.remove("listening"); };
+        recognition.onerror=()=>{ dictating=false; btn.classList.remove("listening"); };
+    };
+}
+
+/* ===================== READ ALOUD ======================= */
+function attachPlayback(id){
+    if(!examData.enableReadAloud) return;
+    const ta=document.getElementById("textarea"+id);
+    const bar=document.getElementById("playbackBar"+id);
+    if(!bar||!ta)return;
+
+    const play=bar.querySelector(".pbPlay");
+    const pause=bar.querySelector(".pbPause");
+    const stop=bar.querySelector(".pbStop");
+    const speed=bar.querySelector(".pbSpeed");
+
+    play.onclick=()=>{
+        speechSynthesis.cancel();
+        setTimeout(()=>{
+            const u=new SpeechSynthesisUtterance(ta.value);
+            u.rate=parseFloat(speed.value);
+            speechSynthesis.speak(u);
+        },120);
+    };
+    pause.onclick=()=>speechSynthesis.pause();
+    stop.onclick=()=>speechSynthesis.cancel();
+}
+
+/* ======================= INIT ========================== */
+renderQuestions();
+
+setInterval(()=>{
+    document.querySelectorAll("textarea,input").forEach(el=>{
+        el.autocomplete="off";
+        el.spellcheck=false;
+    });
+},500);
+</script>
+</body>
+</html>

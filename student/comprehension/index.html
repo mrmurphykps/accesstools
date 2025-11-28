@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Student Tool v5.1</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- jsPDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+/* ROOT THEME VARIABLES */
+:root {
+  --bg:#f5f5f5;
+  --fg:#000;
+  --accent:#004aad;
+}
+
+body {
+  margin:0;
+  font-family:Arial, sans-serif;
+  background:var(--bg);
+  color:var(--fg);
+}
+
+#container {
+  width:90%;
+  max-width:1200px;
+  margin:auto;
+  padding:20px;
+}
+
+.page { display:none; }
+.activePage { display:block; }
+
+textarea {
+  width:100%;
+  min-height:120px;
+  font-size:18px;
+  padding:12px;
+  border:2px solid var(--fg);
+  border-radius:8px;
+  resize:vertical;
+}
+
+.passageBox {
+  background:#e9f0ff;
+  border-left:6px solid var(--accent);
+  padding:15px;
+  border-radius:6px;
+  white-space:pre-wrap;
+  margin-bottom:20px;
+}
+
+.button {
+  padding:10px 20px;
+  font-size:18px;
+  margin:10px 5px;
+  cursor:pointer;
+}
+
+.readicon, .micicon {
+  font-size:22px;
+  cursor:pointer;
+  margin-left:8px;
+}
+
+.micicon.listening {
+  color:red;
+  animation:pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%{opacity:1;}
+  50%{opacity:0.3;}
+  100%{opacity:1;}
+}
+
+/* THEME BUTTON */
+#themeBtn {
+  display:none;
+  position:fixed;
+  top:10px;
+  right:10px;
+  background:var(--accent);
+  color:white;
+  border:none;
+  padding:8px 14px;
+  font-size:16px;
+  border-radius:6px;
+  cursor:pointer;
+  z-index:20;
+}
+
+/* READ ALOUD TOOLBAR */
+#readToolbar {
+  display:none;
+  text-align:center;
+  margin-top:20px;
+}
+
+/* THEME MODAL (optional in future) */
+</style>
+</head>
+
+<body>
+
+<button id="themeBtn" onclick="openTheme()">Theme ⚙️</button>
+
+<div id="container">
+
+<!-- PAGE 1 -->
+<div id="page1" class="page activePage">
+<h1>Digital Exam Entry</h1>
+<p><b>Pupil:</b> Please wait for the invigilator.</p>
+
+<label>Assessment Name:<br>
+<input type="text" id="assessmentName" style="width:100%;padding:10px;font-size:18px;"></label><br><br>
+
+<label>Candidate Name:<br>
+<input type="text" id="candidateName" style="width:100%;padding:10px;font-size:18px;"></label><br><br>
+
+<label>Candidate Number:<br>
+<input type="text" id="candidateNumber" style="width:100%;padding:10px;font-size:18px;"></label><br><br>
+
+<label><input type="checkbox" id="dark"> Dark Mode</label><br>
+<label><input type="checkbox" id="high"> High Contrast</label><br><br>
+
+<label><input type="checkbox" id="enableRead"> Enable Read-Aloud</label><br>
+<label><input type="checkbox" id="enableDict"> Enable Dictation</label><br><br>
+
+<input type="file" id="file" accept="application/json"><br><br>
+
+<button class="button" onclick="loadAssessment()">Load Assessment</button>
+<button class="button" onclick="startExam()">Start</button>
+</div>
+
+<!-- QUESTION PAGES -->
+<div id="questionPages"></div>
+
+<!-- REVIEW PAGE -->
+<div id="reviewPage" class="page">
+  <h2>Review Answers</h2>
+  <div id="reviewContainer"></div>
+  <button class="button" onclick="exportPDF()">Download PDF</button>
+</div>
+
+<!-- READ TOOLBAR -->
+<div id="readToolbar">
+<button class="button" onclick="speechSynthesis.pause()">⏸ Pause</button>
+<button class="button" onclick="speechSynthesis.cancel()">⏹ Stop</button>
+</div>
+
+</div>
+
+<script>
+/* GLOBALS */
+let exam={questions:[]};
+let enableRead=false, enableDict=false;
+let assessmentName="", candidateName="", candidateNumber="";
+let recognition=null, currentMic=null;
+
+/* THEME SYSTEM */
+function applyTheme(mode){
+  if(mode==="dark"){
+    document.documentElement.style.setProperty('--bg','#111');
+    document.documentElement.style.setProperty('--fg','#eee');
+    document.documentElement.style.setProperty('--accent','#3399ff');
+  } else if(mode==="high"){
+    document.documentElement.style.setProperty('--bg','#000');
+    document.documentElement.style.setProperty('--fg','#fff');
+    document.documentElement.style.setProperty('--accent','#ff0');
+  } else {
+    document.documentElement.style.setProperty('--bg','#f5f5f5');
+    document.documentElement.style.setProperty('--fg','#000');
+    document.documentElement.style.setProperty('--accent','#004aad');
+  }
+}
+
+document.getElementById("dark").addEventListener("change",()=>{
+  if(dark.checked) high.checked=false;
+  applyTheme(dark.checked?"dark":"default");
+});
+
+document.getElementById("high").addEventListener("change",()=>{
+  if(high.checked) dark.checked=false;
+  applyTheme(high.checked?"high":"default");
+});
+
+/* LOAD JSON */
+function loadAssessment(){
+  let f=document.getElementById("file").files[0];
+  if(!f){alert("Choose assessment JSON");return;}
+
+  let r=new FileReader();
+  r.onload=e=>{
+    let j=JSON.parse(e.target.result);
+    exam.questions=[];
+    j.passages.forEach(p=>{
+      p.questions.forEach(q=>{
+        exam.questions.push({
+          passage:p.text,
+          question:q.question,
+          marks:q.marks,
+          text:""
+        });
+      });
+    });
+    alert("Assessment loaded.");
+  };
+  r.readAsText(f);
+}
+
+/* START EXAM */
+function startExam(){
+  assessmentName=document.getElementById("assessmentName").value.trim();
+  candidateName=document.getElementById("candidateName").value.trim();
+  candidateNumber=document.getElementById("candidateNumber").value.trim();
+
+  if(!assessmentName || !candidateName || !candidateNumber){
+    alert("All fields are required.");
+    return;
+  }
+
+  enableRead=document.getElementById("enableRead").checked;
+  enableDict=document.getElementById("enableDict").checked;
+
+  if(enableRead) document.getElementById("readToolbar").style.display="block";
+  document.getElementById("themeBtn").style.display="block";
+
+  go(1);
+}
+
+/* RENDER QUESTIONS */
+function go(n){
+  render();
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove("activePage"));
+  document.getElementById("q"+n).classList.add("activePage");
+}
+
+function render(){
+  let wrap=document.getElementById("questionPages");
+  wrap.innerHTML="";
+
+  exam.questions.forEach((q,i)=>{
+    let id=i+1;
+
+    let rp = enableRead? `<span class='readicon' onclick='speak(\`${q.passage.replace(/`/g,"\\`")}\`)'>🔊</span>`:"";
+    let rq = enableRead? `<span class='readicon' onclick='speak(\`${q.question} ${q.marks} marks\`)'>🔊</span>`:"";
+    let ra = enableRead? `<span class='readicon' onclick='speak(document.getElementById("ta${id}").value)'>🔊</span>`:"";
+    let mic = enableDict? `<span class='micicon' onclick='startDict(${i})'>🎤</span>`:"";
+
+    let div=document.createElement("div");
+    div.className="page";
+    div.id="q"+id;
+
+    div.innerHTML = `
+      <h2>Question ${id}</h2>
+      <b>Passage:</b> ${rp}
+      <div class='passageBox'>${q.passage}</div>
+
+      <b>${q.question}</b> (${q.marks} Marks) ${rq}<br><br>
+
+      <textarea id='ta${id}' oninput='exam.questions[${i}].text=this.value'>${q.text}</textarea>
+      ${ra}${mic}<br><br>
+
+      ${i>0?`<button class="button" onclick="go(${id-1})">Back</button>`:""}
+      ${i<exam.questions.length-1?`<button class="button" onclick="go(${id+1})">Next</button>`:""}
+      <button class="button" onclick="review()">Review</button>
+    `;
+
+    wrap.appendChild(div);
+  });
+}
+
+/* REVIEW */
+function review(){
+  let rc=document.getElementById("reviewContainer");
+  rc.innerHTML="";
+
+  exam.questions.forEach((q,i)=>{
+    rc.innerHTML+=`
+      <h3>Q${i+1} (${q.marks} marks)</h3>
+      <p><b>${q.question}</b></p>
+      <p>${q.text}</p>
+      <button class="button" onclick="go(${i+1})">Edit</button>
+      <hr>
+    `;
+  });
+
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove("activePage"));
+  document.getElementById("reviewPage").classList.add("activePage");
+}
+
+/* READ ALOUD */
+function speak(t){
+  if(!enableRead) return;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(t));
+}
+
+/* DICTATION ENGINE */
+function cleanText(t){
+  t=t.toLowerCase();
+  t=t.replace(/[.,!?;:"'()\\[\\]{}-]/g,"");
+  t=t.replace(/full stop/g,".");
+  t=t.replace(/comma/g,",");
+  t=t.replace(/question mark/g,"?");
+  t=t.replace(/exclamation mark/g,"!");
+  t=t.replace(/colon/g,":");
+  t=t.replace(/semicolon/g,";");
+  t=t.replace(/\s+/g," ").trim();
+  return t;
+}
+
+function startDict(i){
+  if(!enableDict){alert("Dictation not enabled.");return;}
+
+  if(!recognition){
+    window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    if("autoPunctuation" in recognition) recognition.autoPunctuation = false;
+  }
+
+  let mic=document.querySelectorAll('.micicon')[i];
+
+  if(currentMic===mic){
+    stopDict();
+    return;
+  }
+
+  stopDict();
+  currentMic=mic;
+  mic.classList.add("listening");
+
+  recognition.onend=()=>{ if(currentMic) recognition.start(); };
+
+  recognition.onresult=e=>{
+    let raw="";
+    for(let r of e.results){ raw+=r[0].transcript; }
+    let cleaned=cleanText(raw);
+    exam.questions[i].text=cleaned;
+    document.getElementById("ta"+(i+1)).value=cleaned;
+  };
+
+  recognition.start();
+}
+
+function stopDict(){
+  if(currentMic) currentMic.classList.remove("listening");
+  if(recognition) recognition.stop();
+  currentMic=null;
+}
+
+/* PDF EXPORT — WITH ROUNDED BORDER + C2 CONTINUATION */
+function exportPDF(){
+  const { jsPDF } = window.jspdf;
+  let today=new Date().toLocaleDateString();
+
+  let doc=new jsPDF({unit:"pt",format:"a4"});
+  let y=40;
+
+  doc.setFontSize(14);
+  doc.text(`Assessment: ${assessmentName}`,40,y); y+=20;
+  doc.text(`Candidate: ${candidateName}`,40,y); y+=20;
+  doc.text(`Candidate Number: ${candidateNumber}`,40,y); y+=20;
+  doc.text(`Date: ${today}`,40,y); y+=30;
+
+  exam.questions.forEach((q,i)=>{
+    doc.setFont(undefined,"bold");
+    doc.text(`Q${i+1} (${q.marks} marks)`,40,y); y+=16;
+    doc.text(q.question,40,y); y+=20;
+    doc.setFont(undefined,"normal");
+
+    let text=q.text||"";
+    let lines=doc.splitTextToSize(text,510);
+
+    let boxTop=y;
+    let left=40, width=520;
+
+    function drawRoundedBox(top,bottom,roundedTop,roundedBottom){
+      let r=8, x=left, w=width;
+      if(roundedTop){
+        doc.roundedRect(x,top,w,(bottom-top),r,r,"S");
+      } else {
+        doc.rect(x,top,w,(bottom-top),"S");
+      }
+    }
+
+    let pageHeight=820;
+    let lineHeight=16;
+    let maxHeight=pageHeight-80;
+
+    let startIndex=0;
+    while(startIndex < lines.length){
+      let hNeeded = (lines.length-startIndex)*lineHeight + 20;
+
+      if(y + hNeeded > maxHeight){
+        let h= maxHeight-y;
+        drawRoundedBox(boxTop,y+h,false,true);
+        doc.addPage();
+        y=40;
+        boxTop=y;
+      }
+
+      for(let j=startIndex;j<lines.length;j++){
+        if(y+lineHeight>maxHeight){
+          let h=y-boxTop;
+          drawRoundedBox(boxTop,y,false,false);
+          doc.addPage();
+          y=40;
+          boxTop=y;
+        }
+        doc.text(lines[j],left+10,y);
+        y+=lineHeight;
+      }
+      startIndex=lines.length;
+    }
+
+    let boxBottom=y+10;
+    drawRoundedBox(boxTop,boxBottom,true,true);
+    y=boxBottom+30;
+  });
+
+  doc.save(`Assessment - ${candidateName} - ${candidateNumber} - ${today}.pdf`);
+}
+
+function openTheme(){ alert("Theme modal can be added here."); }
+
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'><title>Admin Tool v3</title>
+<meta name='viewport' content='width=device-width'>
+<style>
+body{font-family:Arial;margin:20px;}
+.block{border:1px solid #ccc;padding:15px;margin:15px 0;border-radius:8px;background:#fafafa;}
+textarea,input{width:100%;padding:10px;font-size:16px;margin-top:5px;box-sizing:border-box;}
+.removeBtn{background:#b00;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;margin-top:10px;}
+.addBtn{background:#007acc;color:#fff;padding:6px 12px;border:none;border-radius:4px;cursor:pointer;margin-top:10px;}
+</style>
+</head>
+<body>
+
+<h1>Assessment Builder</h1>
+<p><b>Instructions:</b> Load an existing assessment JSON or create a new one. Add a passage, then add as many questions as needed. You can remove passages or questions individually.</p>
+
+<input type='file' id='load' accept='application/json'>
+<button class='addBtn' onclick='loadJSON()'>Load JSON</button>
+
+<div id='passages'></div>
+
+<button class='addBtn' onclick='addPassage()'>Add Passage</button>
+<button class='addBtn' onclick='exportJSON()'>Export JSON</button>
+
+<script>
+function addPassage(text='',qs=[]){
+ let p=document.createElement('div');
+ p.className='block';
+ p.innerHTML=
+ `<h3>Passage</h3>
+  <textarea class='ptext' rows='4'>${text}</textarea>
+  <div class='qlist'></div>
+  <button class='addBtn' onclick='addQ(this.parentElement)'>Add Question</button>
+  <button class='removeBtn' onclick='this.parentElement.remove()'>Remove Passage</button>`;
+ document.getElementById('passages').appendChild(p);
+ qs.forEach(q=>addQ(p,q.question,q.marks));
+}
+
+function addQ(p,q='',m=1){
+ let d=document.createElement('div');
+ d.className='block';
+ d.innerHTML=
+ `<textarea class='qtext' rows='2'>${q}</textarea>
+  <input type='number' class='marks' value='${m}' min='1'>
+  <button class='removeBtn' onclick='this.parentElement.remove()'>Remove Question</button>`;
+ p.querySelector('.qlist').appendChild(d);
+}
+
+function exportJSON(){
+ let out=[];
+ document.querySelectorAll('#passages>.block').forEach(p=>{
+  let text=p.querySelector('.ptext').value;
+  let qs=[...p.querySelectorAll('.qlist>.block')].map(q=>({
+    question:q.querySelector('.qtext').value,
+    marks:parseInt(q.querySelector('.marks').value)||1
+  }));
+  out.push({text,questions:qs});
+ });
+ let blob=new Blob([JSON.stringify({passages:out},null,2)],{type:'application/json'});
+ let a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);
+ a.download='assessment.json';
+ a.click();
+}
+
+function loadJSON(){
+ let f=load.files[0]; if(!f)return;
+ let r=new FileReader();
+ r.onload=e=>{
+   let j=JSON.parse(e.target.result);
+   passages.innerHTML='';
+   j.passages.forEach(p=>addPassage(p.text,p.questions));
+ };
+ r.readAsText(f);
+}
+</script>
+
+</body>
+</html>
